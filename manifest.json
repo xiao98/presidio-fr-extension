@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "presidio-fr shield",
+  "version": "0.1.0",
+  "description": "Masque les données personnelles françaises (NIR, SIRET, IBAN, e-mail…) avant l'envoi à ChatGPT, et les restaure dans la réponse. Tout se passe dans votre navigateur.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "src/background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["src/recognizers.js", "src/vault.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_popup": "popup.html", "default_title": "presidio-fr shield" }
+}

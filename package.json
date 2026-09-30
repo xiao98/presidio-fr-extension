@@ -1,0 +1,12 @@
+{
+  "name": "presidio-fr-extension",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/recognizers.test.js",
+    "test:e2e": "node --test test/e2e.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

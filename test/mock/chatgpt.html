@@ -1,0 +1,49 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mock chatgpt</title></head>
+<body>
+  <main id="thread"></main>
+  <form id="composer" onsubmit="return false">
+    <div id="prompt-textarea" contenteditable="true" role="textbox" style="border:1px solid #999;min-height:40px;padding:6px"><p></p></div>
+    <button type="button" data-testid="send-button">Send</button>
+  </form>
+  <script>
+    // Mimics ChatGPT: read the editor, append the user bubble, then "stream" an assistant reply
+    // that echoes the received text (so any placeholder the model received comes back).
+    window.__sent = [];
+    const input = document.getElementById("prompt-textarea");
+    const thread = document.getElementById("thread");
+    function send() {
+      const text = input.innerText.trim();
+      if (!text) return;
+      window.__sent.push(text);
+      const u = document.createElement("div");
+      u.dataset.messageAuthorRole = "user";
+      u.textContent = text;
+      thread.appendChild(u);
+      input.innerHTML = "<p></p>";
+      const a = document.createElement("div");
+      a.dataset.messageAuthorRole = "assistant";
+      thread.appendChild(a);
+      const reply = "Reçu : " + text;
+      let i = 0;
+      const iv = setInterval(() => {
+        i += 7;
+        a.textContent = reply.slice(0, i);
+        if (i >= reply.length) clearInterval(iv);
+      }, 10);
+    }
+    document.querySelector('[data-testid="send-button"]').addEventListener("click", send);
+    // ?stubborn=1 : an editor that throws away every programmatic rewrite (simulates a rich editor
+    // the extension cannot drive). The extension must then block the send instead of leaking.
+    if (location.search.includes("stubborn")) {
+      let last = "";
+      input.addEventListener("input", (e) => {
+        const programmatic = !e.isTrusted || (e.data && e.data.length > 1);   // typing inserts one char at a time
+        if (programmatic) input.innerHTML = "<p>" + last + "</p>"; else last = input.innerText;
+      });
+    }
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+  </script>
+</body></html>
