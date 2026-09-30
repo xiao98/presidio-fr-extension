@@ -43,6 +43,13 @@ test("redact on send, restore in reply, vault survives reload", async () => {
     args: ["--disable-extensions-except=" + extDir, "--load-extension=" + extDir],
   });
   try {
+    // regex-only path: switch the NER model off through the popup before the first send
+    const extId = ctx.serviceWorkers()[0].url().split("/")[2];
+    const setup = await ctx.newPage();
+    await setup.goto("chrome-extension://" + extId + "/popup.html");
+    await setup.locator("#ner").uncheck();
+    await setup.close();
+
     const page = await ctx.newPage();
     const ready = () => page.waitForSelector("html[data-pfr-ready]", { state: "attached", timeout: 10000 });
     await page.goto(origin + "/");
@@ -70,7 +77,6 @@ test("redact on send, restore in reply, vault survives reload", async () => {
     assert.equal(await page.locator('[data-message-author-role][data-pfr-protected="restored"]').count(), 2);
 
     // reveal mode via the popup: messages switch to what the model received
-    const extId = ctx.serviceWorkers()[0].url().split("/")[2];
     const popup = await ctx.newPage();
     await popup.goto("chrome-extension://" + extId + "/popup.html");
     assert.equal(await popup.locator("#masked").textContent(), "3");
@@ -110,6 +116,52 @@ test("redact on send, restore in reply, vault survives reload", async () => {
     await page.waitForTimeout(300);
     assert.deepEqual(await page.evaluate(() => window.__sent), []);
     assert.ok((await page.locator("#pfr-toast").textContent()).includes("envoi bloqué"));
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+// Real model in the browser: downloads ~120 MB into a fresh profile, so it only runs when asked for.
+const runNer = process.env.PFR_E2E_NER === "1";
+test("NER path: names and addresses masked by the in-browser model", { skip: !runNer, timeout: 900000 }, async () => {
+  const html = fs.readFileSync(path.join(__dirname, "mock", "chatgpt.html"));
+  const server = http.createServer((_, res) => { res.setHeader("content-type", "text/html; charset=utf-8"); res.end(html); });
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const extDir = buildTestExtension(origin);
+  for (const f of ["dist", "vendor", "offscreen.html"]) copyTree(path.join(ROOT, f), path.join(extDir, f));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "pfr-prof-"));
+  const ctx = await chromium.launchPersistentContext(userData, {
+    channel: "chromium", headless: true,
+    args: ["--disable-extensions-except=" + extDir, "--load-extension=" + extDir],
+  });
+  try {
+    const extId = (ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker")).url().split("/")[2];
+    const popup = await ctx.newPage();
+    await popup.goto("chrome-extension://" + extId + "/popup.html");
+    const t0 = Date.now();
+    await popup.waitForFunction(() => /prêt/.test(document.getElementById("nerStatus").textContent), null, { timeout: 600000 });
+    console.log(`model ready in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+    await popup.close();
+
+    const page = await ctx.newPage();
+    await page.goto(origin + "/");
+    await page.waitForSelector("html[data-pfr-ready]", { state: "attached", timeout: 10000 });
+    await page.locator("#prompt-textarea").click();
+    await page.keyboard.type("Le salarié Jean Dupont, demeurant 12 rue de la Paix, 75002 Paris, né le 12/03/1985, travaille chez Lemaire SARL. Facture du 27/04/2026.");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__sent.length === 1, null, { timeout: 60000 });
+    const sent = await page.evaluate(() => window.__sent[0]);
+    console.log("sent:", sent);
+    assert.ok(sent.includes("{{PERSON_1}}") && !sent.includes("Dupont"), "name not masked");
+    assert.ok(sent.includes("{{ADDRESS_1}}") && !sent.includes("rue de la Paix"), "address not masked");
+    assert.ok(sent.includes("{{DOB_1}}"), "birth date not masked");
+    assert.ok(sent.includes("27/04/2026"), "invoice date must stay");
+    await page.waitForFunction(() => {
+      const a = document.querySelector('[data-message-author-role="assistant"]');
+      return a && a.textContent.includes("Jean Dupont") && !a.textContent.includes("{{");
+    }, null, { timeout: 5000 });
   } finally {
     await ctx.close();
     server.close();

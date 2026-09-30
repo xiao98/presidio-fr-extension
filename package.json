@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "build": "node scripts/build.mjs",
     "test": "node --test test/recognizers.test.js",
+    "test:ner": "node --test test/ner.test.mjs",
     "test:e2e": "node --test test/e2e.test.js"
   },
   "devDependencies": {
+    "esbuild": "^0.28.2",
     "playwright": "^1.63.0"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.0"
   }
 }

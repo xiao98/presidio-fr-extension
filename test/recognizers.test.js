@@ -56,3 +56,20 @@ test("vault: redact, stable placeholders, restore", () => {
   assert.equal(v2.restore("{{EMAIL_1}}"), "a@b.fr");
   assert.equal(v2.conceal("Le 185057800608491 de c@d.fr"), "Le {{NIR_1}} de {{EMAIL_2}}");
 });
+
+const { mapSpans, combine } = require("../src/nermap.js");
+
+test("nermap: merge name parts, keep DATE only as birth date, regex wins overlap", () => {
+  const text = "Le salarié DUPONT Jean, né le 12/03/1985, facture du 27/04/2026, chez Lemaire SARL, SIRET 552 100 554 00013.";
+  const raw = [
+    { label: "SURNAME", start: 11, end: 17, score: 0.99 }, { label: "GIVEN_NAME", start: 18, end: 22, score: 0.99 },
+    { label: "DATE", start: 30, end: 40, score: 0.99 }, { label: "DATE", start: 53, end: 63, score: 0.99 },
+    { label: "COMPANY_NAME", start: 70, end: 82, score: 0.99 }, { label: "TAX_ID", start: 90, end: 107, score: 0.9 },
+  ];
+  const m = mapSpans(text, raw);
+  assert.deepEqual(m.map(x => [x.type, x.text]), [["PERSON", "DUPONT Jean"], ["DOB", "12/03/1985"], ["COMPANY", "Lemaire SARL"], ["ID", "552 100 554 00013"]]);
+  const all = combine(text, findPII(text), raw);
+  assert.deepEqual(all.map(x => [x.type, x.src]), [["PERSON", "ner"], ["DOB", "ner"], ["COMPANY", "ner"], ["SIRET", "regex"]]);
+  const v = createVault();
+  assert.equal(v.redact(text, all), "Le salarié {{PERSON_1}}, né le {{DOB_1}}, facture du 27/04/2026, chez {{COMPANY_1}}, SIRET {{SIRET_1}}.");
+});

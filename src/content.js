@@ -1,5 +1,5 @@
 (async function () {
-  const { findPII, createVault } = globalThis.PFR;
+  const { findPII, createVault, combine } = globalThis.PFR;
   const VAULT_KEY = "vault:" + location.host;
   const STATS_KEY = "stats";
 
@@ -62,29 +62,20 @@
     return norm(readInput(el)) === norm(text);
   }
 
-  // Returns true if the send was intercepted (caller must stop the original event).
-  let bypass = false;
-  function interceptSend() {
-    if (!enabled || bypass) return false;
-    const el = findInput();
-    if (!el) return false;
-    const text = readInput(el);
-    const matches = findPII(text);
-    if (!matches.length) return false;
+  // ---------- NER (names, addresses, companies) via the offscreen model ----------
+  let ner = true;
+  chrome.storage.local.get({ ner: true }).then(v => { ner = v.ner; });
+  chrome.storage.onChanged.addListener((ch, area) => { if (area === "local" && ch.ner) ner = ch.ner.newValue; });
 
-    const before = vault.size();
-    const redacted = vault.redact(text, matches);
-    const ok = writeInput(el, redacted);
-    if (!ok) {
-      // Fail closed: never let the original text leave the page silently.
-      toast("Masquage impossible dans cet éditeur, envoi bloqué. Retirez les données sensibles ou désactivez l'extension.", true);
-      return true;
-    }
-    const types = [...new Set(matches.map(m => m.type))];
-    persist(vault.size() - before, matches.map(m => m.type));
-    const n = matches.length;
-    toast(n + " donnée" + (n > 1 ? "s" : "") + " masquée" + (n > 1 ? "s" : "") + " : " + types.join(", "));
-    // Re-trigger the send once the editor has applied the new text.
+  async function nerSpans(text) {
+    if (!ner) return { spans: [] };
+    try { return (await chrome.runtime.sendMessage({ target: "background", type: "ner", text })) || { error: "no_reply" }; }
+    catch (e) { return { error: "model_error", detail: String(e && e.message || e) }; }
+  }
+
+  // Every send is held, inspected (regex + model), rewritten if needed, then re-triggered with `bypass`.
+  let bypass = false;
+  function resend(el) {
     setTimeout(() => {
       const btn = findSendButton();
       bypass = true;
@@ -95,6 +86,45 @@
         setTimeout(() => { bypass = false; }, 50);
       }
     }, 30);
+  }
+
+  async function handleSend(el, text) {
+    const regex = findPII(text);
+    const r = await nerSpans(text);
+    let nerRaw = r.spans || [];
+    if (r.error === "not_ready") {
+      // Fail closed while the model is still loading: names would otherwise leave unmasked.
+      const pct = r.progress && r.progress.pct ? r.progress.pct + " %" : "";
+      toast("Modèle de détection des noms en cours de chargement " + pct + ". Réessayez dans un instant.", true);
+      return;
+    }
+    if (r.error && r.error !== "disabled") {
+      toast("Détection des noms indisponible (" + r.error + ") : seules les règles ont été appliquées.", true);
+    }
+    const matches = combine(text, regex, nerRaw);
+    if (!matches.length) { resend(el); return; }
+
+    const before = vault.size();
+    const ok = writeInput(el, vault.redact(text, matches));
+    if (!ok) {
+      toast("Masquage impossible dans cet éditeur, envoi bloqué. Retirez les données sensibles ou désactivez l'extension.", true);
+      return;
+    }
+    const types = [...new Set(matches.map(m => m.type))];
+    persist(vault.size() - before, matches.map(m => m.type));
+    const n = matches.length;
+    toast(n + " donnée" + (n > 1 ? "s" : "") + " masquée" + (n > 1 ? "s" : "") + " : " + types.join(", "));
+    resend(el);
+  }
+
+  // Returns true if the send was taken over (caller must stop the original event).
+  function interceptSend() {
+    if (!enabled || bypass) return false;
+    const el = findInput();
+    if (!el) return false;
+    const text = readInput(el);
+    if (!text.trim()) return false;
+    handleSend(el, text);
     return true;
   }
 
