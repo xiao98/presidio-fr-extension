@@ -141,6 +141,105 @@
     if (interceptSend()) { e.preventDefault(); e.stopImmediatePropagation(); }
   }, true);
 
+  // ---------- attachments: a file chosen, dropped or pasted is replaced by a masked copy before upload ----------
+  const MAX_FILE = 25 * 1024 * 1024;
+  const ours = new WeakSet();   // events we re-dispatch with the masked files (never a timed window: it raced)
+
+  const toB64 = (file) => new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(",")[1]);
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(file);
+  });
+  const fromB64 = (b64, name, mime) => new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], name, { type: mime });
+
+  // Returns the masked File, or null when the upload must be blocked (toast already shown).
+  async function maskFile(file) {
+    if (file.size > MAX_FILE) { toast(file.name + " : fichier trop volumineux (> 25 Mo), envoi bloqué.", true); return null; }
+    if (!/\.(pdf|docx|xlsx|txt|csv|md)$/i.test(file.name)) {
+      toast(file.name + " : type non pris en charge (PDF, Word, Excel, texte), envoi bloqué.", true); return null;
+    }
+    let r;
+    try { r = await chrome.runtime.sendMessage({ target: "background", type: "file.extract", name: file.name, ner, b64: await toB64(file) }); }
+    catch (e) { r = { error: "model_error", detail: String(e && e.message || e) }; }
+    if (!r || r.error) {
+      const why = { not_ready: "modèle en cours de chargement, réessayez dans un instant", scanned: "PDF scanné sans texte, non masquable pour l'instant",
+        unsupported: "type non pris en charge", disabled: "modèle désactivé : les noms ne seraient pas masqués", job_expired: "délai dépassé" }[r && r.error]
+        || (r && (r.error + (r.detail ? " — " + r.detail : ""))) || "pas de réponse";
+      toast(file.name + " : " + why + ". Envoi bloqué.", true);
+      return null;
+    }
+    const before = vault.size();
+    const redactedById = {};
+    let count = 0;
+    const types = new Set();
+    for (const s of r.segments) {
+      const matches = combine(s.text, findPII(s.text), s.ner || []);
+      if (!matches.length) continue;
+      redactedById[s.id] = vault.redact(s.text, matches);
+      count += matches.length;
+      matches.forEach(m => types.add(m.type));
+    }
+    let w;
+    try { w = await chrome.runtime.sendMessage({ target: "background", type: "file.rewrite", job: r.job, redactedById }); }
+    catch (e) { w = { error: "model_error" }; }
+    if (!w || w.error) { toast(file.name + " : réécriture impossible (" + (w && w.error) + "). Envoi bloqué.", true); return null; }
+    persist(vault.size() - before, [...types]);
+    toast(file.name + " → " + w.name + " : " + count + " donnée" + (count > 1 ? "s" : "") + " masquée" + (count > 1 ? "s" : "") + (count ? " : " + [...types].join(", ") : ""));
+    return fromB64(w.b64, w.name, w.mime);
+  }
+
+  async function maskFiles(files) {
+    const out = [];
+    for (const f of files) {
+      const m = await maskFile(f);
+      if (!m) return null;          // one blocked file blocks the whole upload
+      out.push(m);
+    }
+    return out;
+  }
+
+  function dispatchOurs(target, ev) { ours.add(ev); target.dispatchEvent(ev); }
+
+  document.addEventListener("change", (e) => {
+    const input = e.target;
+    if (!enabled || ours.has(e) || !(input instanceof HTMLInputElement) || input.type !== "file" || !input.files || !input.files.length) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const files = [...input.files];
+    maskFiles(files).then(masked => {
+      if (!masked) { input.value = ""; return; }
+      const dt = new DataTransfer();
+      masked.forEach(f => dt.items.add(f));
+      input.files = dt.files;
+      dispatchOurs(input, new Event("input", { bubbles: true }));
+      dispatchOurs(input, new Event("change", { bubbles: true }));
+    });
+  }, true);
+
+  document.addEventListener("drop", (e) => {
+    if (!enabled || ours.has(e) || !e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const target = e.target, files = [...e.dataTransfer.files];
+    maskFiles(files).then(masked => {
+      if (!masked) return;
+      const dt = new DataTransfer();
+      masked.forEach(f => dt.items.add(f));
+      dispatchOurs(target, new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+  }, true);
+
+  document.addEventListener("paste", (e) => {
+    if (!enabled || ours.has(e) || !e.clipboardData || !e.clipboardData.files || !e.clipboardData.files.length) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    const target = e.target, files = [...e.clipboardData.files];
+    maskFiles(files).then(masked => {
+      if (!masked) return;
+      const dt = new DataTransfer();
+      masked.forEach(f => dt.items.add(f));
+      dispatchOurs(target, new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+    });
+  }, true);
+
   // ---------- render placeholders in messages: restore originals, or reveal what the model saw ----------
   const MSG_SELECTOR = "[data-message-author-role]";
   function renderUnder(rootEl) {

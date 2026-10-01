@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "presidio-fr shield",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Masque les données personnelles françaises (noms, adresses, NIR, SIRET, IBAN, e-mail…) avant l'envoi à ChatGPT, et les restaure dans la réponse. Tout se passe dans votre navigateur.",
   "permissions": ["storage", "offscreen"],
   "host_permissions": ["https://huggingface.co/*", "https://*.hf.co/*"],

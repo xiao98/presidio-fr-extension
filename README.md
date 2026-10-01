@@ -17,6 +17,21 @@ Le décodage est en mode « recall-first » (un token est une entité dès que P
 
 Sur [FR-PII-Bench v0](https://github.com/xiao98/presidio-fr/tree/main/eval/benchmark) (300 documents administratifs synthétiques, 2 105 entités), cette configuration obtient recall 0,99 / précision 0,97, avec 41 masquages inutiles sur 300 documents (noms en capitales : 0,99, contre 0,49 pour le modèle seul) ; les règles seules restent à 0,73 de recall car elles ne voient ni les noms ni les adresses.
 
+## Pièces jointes
+
+Un fichier choisi, glissé ou collé dans ChatGPT est remplacé par une copie masquée **avant** l'envoi, avec les mêmes placeholders que le texte (un même SIRET garde le même `{{SIRET_1}}` d'un message à un fichier) :
+
+| Fichier | Traitement | Résultat |
+|---|---|---|
+| PDF avec couche texte | texte extrait ligne par ligne (pdf.js), masqué | `facture-masqué.txt` (la mise en page PDF ne peut pas être conservée) |
+| PDF scanné (sans texte) | détecté | **envoi bloqué** avec message ; OCR à venir |
+| Word `.docx` | paragraphes, en-têtes, pieds de page, tableaux réécrits dans le XML | `contrat-masqué.docx`, mise en page et styles conservés |
+| Excel `.xlsx` | chaînes partagées, cellules texte et cellules numériques (un SIRET saisi en nombre) ; formules intactes | `clients-masqué.xlsx` |
+| `.txt` `.csv` `.md` | texte | `note-masqué.txt` |
+| autre (images, zip…) | | **envoi bloqué** |
+
+Un nom coupé sur plusieurs « runs » Word (« Jean » en gras + « Dupont ») est masqué comme un seul `{{PERSON_1}}`. Limite : 25 Mo par fichier.
+
 ## Installer (mode développeur)
 
 Télécharger `presidio-fr-shield-<version>.zip` dans [Releases](https://github.com/xiao98/presidio-fr-extension/releases) et le décompresser. Il contient déjà le bundle et le runtime WASM : rien à installer, pas de Node.
@@ -39,7 +54,7 @@ Depuis les sources : `npm install && npm run build` produit `dist/` et `vendor/`
 ```bash
 npm test                        # règles, vault, fusion (Node, sans navigateur ni modèle)
 npm run test:ner                # modèle en Node sur FR-PII-Bench : recall / précision (télécharge le modèle)
-npm run test:e2e                # extension dans Chromium contre une page qui imite ChatGPT, règles seules
+npm run test:e2e                # extension dans Chromium contre une page qui imite ChatGPT : règles seules + pièces jointes (PDF, DOCX, XLSX, scan bloqué)
 PFR_E2E_NER=1 npm run test:e2e  # idem avec le vrai modèle chargé dans le navigateur (lent)
 ```
 
@@ -48,6 +63,6 @@ PFR_E2E_NER=1 npm run test:e2e  # idem avec le vrai modèle chargé dans le navi
 - Sélecteurs ChatGPT (`#prompt-textarea`, `data-testid="send-button"`, `data-message-author-role`) : à re-vérifier à chaque refonte de l'interface.
 - Forme administrative « NOM Prénom » en capitales : le modèle la rate dans 45 % des cas sur le benchmark ; c'est le seul point où un fine-tuning aurait un sens.
 - Claude.ai et Le Chat : mêmes mécanismes, sélecteurs à ajouter.
-- Fichiers joints (PDF, Excel) : non traités.
+- PDF scannés : bloqués tant que l'OCR n'est pas intégré ; PDF texte : mise en page perdue (sortie .txt).
 
 MIT.

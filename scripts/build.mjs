@@ -27,6 +27,9 @@ const ortDist = path.join(root, "node_modules", "onnxruntime-web", "dist");
 // ORT picks a variant at runtime (this transformers.js build asks for the asyncify one), so ship them all.
 const wanted = fs.readdirSync(ortDist).filter(f => /^ort-wasm-simd-threaded.*\.(wasm|mjs)$/.test(f));
 for (const f of wanted) fs.copyFileSync(path.join(ortDist, f), path.join(vendor, f));
+// pdf.js worker (runs the PDF parser off the offscreen document's main thread)
+fs.copyFileSync(path.join(root, "node_modules", "pdfjs-dist", "build", "pdf.worker.min.mjs"), path.join(vendor, "pdf.worker.min.mjs"));
+wanted.push("pdf.worker.min.mjs");
 const size = f => (fs.statSync(f).size / 1048576).toFixed(1) + " MB";
 console.log("dist/offscreen.js", size(path.join(dist, "offscreen.js")));
 for (const f of wanted) console.log("vendor/" + f, size(path.join(vendor, f)));

@@ -167,3 +167,75 @@ test("NER path: names and addresses masked by the in-browser model", { skip: !ru
     server.close();
   }
 });
+
+// Attachments: PDF / DOCX / XLSX chosen in the file input are replaced by masked copies before "upload";
+// a scanned PDF is blocked. Regex-only (model off) so it runs in CI; the NER e2e above covers the model.
+test("attachments are masked before upload; scanned PDF is blocked", { timeout: 300000 }, async () => {
+  const JSZip = require("jszip");
+  const html = fs.readFileSync(path.join(__dirname, "mock", "chatgpt.html"));
+  const server = http.createServer((_, res) => { res.setHeader("content-type", "text/html; charset=utf-8"); res.end(html); });
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const extDir = buildTestExtension(origin);
+  for (const f of ["dist", "vendor", "offscreen.html"]) copyTree(path.join(ROOT, f), path.join(extDir, f));
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "pfr-prof-"));
+  const ctx = await chromium.launchPersistentContext(userData, {
+    channel: "chromium", headless: true,
+    args: ["--disable-extensions-except=" + extDir, "--load-extension=" + extDir],
+  });
+  try {
+    const extId = (ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker")).url().split("/")[2];
+    const setup = await ctx.newPage();
+    await setup.goto("chrome-extension://" + extId + "/popup.html");
+    await setup.locator("#ner").uncheck();
+    await setup.close();
+    const page = await ctx.newPage();
+    page.on("console", m => { if (m.type() === "error") console.log("[page]", m.text().slice(0, 200)); });
+    await page.goto(origin + "/");
+    await page.waitForSelector("html[data-pfr-ready]", { state: "attached", timeout: 10000 });
+    const fx = (f) => path.join(__dirname, "fixtures", "files", f);
+
+    await page.setInputFiles("#file", [fx("facture.pdf"), fx("contrat.docx"), fx("clients.xlsx")]);
+    await page.waitForFunction(() => window.__uploads.length === 3, null, { timeout: 120000 });
+    const ups = await page.evaluate(() => window.__uploads);
+    const byName = Object.fromEntries(ups.map(u => [u.name, u]));
+    assert.deepEqual(Object.keys(byName).sort(), ["clients-masqué.xlsx", "contrat-masqué.docx", "facture-masqué.txt"]);
+
+    const txt = Buffer.from(byName["facture-masqué.txt"].b64, "base64").toString("utf8");
+    assert.ok(txt.includes("{{SIRET_1}}") || txt.includes("{{SIREN_1}}"), txt);
+    for (const leak of ["552 100 554", "06 12 34 56 78", "jean.dupont@example.com", "1 85 05 78 006 084 91", "FR76 3000"]) assert.ok(!txt.includes(leak), "pdf leaked " + leak);
+    assert.ok(txt.includes("FAC-2026-0042"));
+
+    const docx = await JSZip.loadAsync(Buffer.from(byName["contrat-masqué.docx"].b64, "base64"));
+    const body = await docx.file("word/document.xml").async("string");
+    for (const leak of ["552 100 554 00013", "jean.dupont@example.com", "1 85 05 78 006 084 91"]) assert.ok(!body.includes(leak), "docx leaked " + leak);
+    assert.ok(body.includes("<w:tbl>"));
+
+    const xlsx = await JSZip.loadAsync(Buffer.from(byName["clients-masqué.xlsx"].b64, "base64"));
+    const sheet = await xlsx.file("xl/worksheets/sheet1.xml").async("string");
+    for (const leak of ["55210055400013", "FR7630006000011234567890189", "jean.dupont@example.com"]) assert.ok(!sheet.includes(leak), "xlsx leaked " + leak);
+    assert.ok(sheet.includes("<f>SUM(E2:E3)</f>"));
+    assert.ok((await page.locator("#pfr-toast").textContent()).includes("masquée"));
+
+    // scanned PDF: blocked, nothing uploaded, red toast
+    await page.setInputFiles("#file", [fx("scan.pdf")]);
+    await page.waitForFunction(() => /scanné/.test(document.getElementById("pfr-toast").textContent), null, { timeout: 60000 });
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => window.__uploads.length), 3);
+
+    // drag & drop goes through the same path
+    await page.evaluate(async (b64) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], "note.txt", { type: "text/plain" }));
+      document.getElementById("drop").dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    }, Buffer.from("Client SIRET 552 100 554 00013, IBAN FR76 3000 6000 0112 3456 7890 189.").toString("base64"));
+    await page.waitForFunction(() => window.__uploads.length === 4, null, { timeout: 60000 });
+    const note = await page.evaluate(() => window.__uploads[3]);
+    assert.equal(note.name, "note-masqué.txt");
+    // same SIRET / IBAN as in facture.pdf -> same placeholders (stable across messages and files)
+    assert.equal(Buffer.from(note.b64, "base64").toString("utf8"), "Client SIRET {{SIRET_1}}, IBAN {{IBAN_1}}.");
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});

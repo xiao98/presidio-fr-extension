@@ -13,6 +13,8 @@
     "playwright": "^1.63.0"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.3.0"
+    "@huggingface/transformers": "^4.3.0",
+    "jszip": "^3.10.2",
+    "pdfjs-dist": "^6.3.289"
   }
 }

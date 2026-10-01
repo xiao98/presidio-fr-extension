@@ -5,6 +5,8 @@
   <form id="composer" onsubmit="return false">
     <div id="prompt-textarea" contenteditable="true" role="textbox" style="border:1px solid #999;min-height:40px;padding:6px"><p></p></div>
     <button type="button" data-testid="send-button">Send</button>
+    <input type="file" id="file" multiple>
+    <div id="drop" style="border:1px dashed #999;padding:20px">drop zone</div>
   </form>
   <script>
     // Mimics ChatGPT: read the editor, append the user bubble, then "stream" an assistant reply
@@ -33,6 +35,19 @@
       }, 10);
     }
     document.querySelector('[data-testid="send-button"]').addEventListener("click", send);
+    // Mimics ChatGPT's uploader: whatever file reaches the input/drop handler is "uploaded" (recorded as base64).
+    window.__uploads = [];
+    function record(files) {
+      for (const f of files) {
+        const r = new FileReader();
+        r.onload = () => window.__uploads.push({ name: f.name, type: f.type, size: f.size, b64: String(r.result).split(",")[1] });
+        r.readAsDataURL(f);
+      }
+    }
+    document.getElementById("file").addEventListener("change", (e) => record(e.target.files));
+    const drop = document.getElementById("drop");
+    drop.addEventListener("dragover", (e) => e.preventDefault());
+    drop.addEventListener("drop", (e) => { e.preventDefault(); record(e.dataTransfer.files); });
     // ?stubborn=1 : an editor that throws away every programmatic rewrite (simulates a rich editor
     // the extension cannot drive). The extension must then block the send instead of leaking.
     if (location.search.includes("stubborn")) {
