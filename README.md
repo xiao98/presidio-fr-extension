@@ -1,6 +1,6 @@
 # presidio-fr shield (extension navigateur)
 
-Masque les données personnelles françaises **dans votre navigateur** avant qu'elles ne partent vers ChatGPT, puis restaure les valeurs dans la réponse affichée. Aucun serveur, aucune installation Python : les règles et le modèle tournent dans l'extension.
+Masque les données personnelles françaises **dans votre navigateur** avant qu'elles ne partent vers ChatGPT, Claude.ai ou Le Chat (Mistral), puis restaure les valeurs dans la réponse affichée. Aucun serveur, aucune installation Python : les règles et le modèle tournent dans l'extension.
 
 ```
 vous tapez    : Le salarié Jean Dupont, 12 rue de la Paix, 75002 Paris, NIR 1 85 05 78 006 084 91, né le 12/03/1985. Facture du 27/04/2026.
@@ -58,11 +58,15 @@ npm run test:e2e                # extension dans Chromium contre une page qui im
 PFR_E2E_NER=1 npm run test:e2e  # idem avec le vrai modèle chargé dans le navigateur (lent)
 ```
 
+## Publication
+
+`npm run package` produit `store/presidio-fr-shield-<version>.zip` (manifest à la racine, pour le Chrome Web Store) et `-unpacked.zip` (pour « charger l'extension non empaquetée »). Le dossier de publication est dans [STORE.md](STORE.md), la politique de confidentialité dans [PRIVACY.md](PRIVACY.md).
+
 ## Limites connues
 
 - Sélecteurs ChatGPT (`#prompt-textarea`, `data-testid="send-button"`, `data-message-author-role`) : à re-vérifier à chaque refonte de l'interface.
 - Forme administrative « NOM Prénom » en capitales : le modèle la rate dans 45 % des cas sur le benchmark ; c'est le seul point où un fine-tuning aurait un sens.
-- Claude.ai et Le Chat : mêmes mécanismes, sélecteurs à ajouter.
+- Claude.ai et Le Chat : pris en charge par des sélecteurs génériques (éditeur ProseMirror, bouton « envoyer » par aria-label) testés sur une page imitant leur structure, à confirmer sur les vrais sites.
 - PDF scannés : bloqués tant que l'OCR n'est pas intégré ; PDF texte : mise en page perdue (sortie .txt).
 
 MIT.

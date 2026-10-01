@@ -1,19 +1,24 @@
 {
   "manifest_version": 3,
   "name": "presidio-fr shield",
-  "version": "0.3.0",
-  "description": "Masque les données personnelles françaises (noms, adresses, NIR, SIRET, IBAN, e-mail…) avant l'envoi à ChatGPT, et les restaure dans la réponse. Tout se passe dans votre navigateur.",
+  "version": "0.4.0",
+  "description": "Masque les données personnelles françaises (noms, adresses, NIR, SIRET, IBAN, fichiers…) avant l'envoi à ChatGPT, Claude ou Le Chat. Tout reste dans votre navigateur.",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
   "permissions": ["storage", "offscreen"],
   "host_permissions": ["https://huggingface.co/*", "https://*.hf.co/*"],
   "background": { "service_worker": "src/background.js" },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*", "https://claude.ai/*", "https://chat.mistral.ai/*"],
       "js": ["src/recognizers.js", "src/vault.js", "src/nermap.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],
-  "action": { "default_popup": "popup.html", "default_title": "presidio-fr shield" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "presidio-fr shield",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" }
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }

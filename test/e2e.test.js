@@ -23,7 +23,7 @@ function copyTree(src, dst) {
 
 function buildTestExtension(origin) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pfr-ext-"));
-  for (const f of ["src", "popup.html", "popup.js"]) copyTree(path.join(ROOT, f), path.join(dir, f));
+  for (const f of ["src", "popup.html", "popup.js", "icons"]) copyTree(path.join(ROOT, f), path.join(dir, f));
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.json"), "utf8"));
   manifest.content_scripts[0].matches = [origin + "/*"];
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(manifest, null, 2));
@@ -44,7 +44,7 @@ test("redact on send, restore in reply, vault survives reload", async () => {
   });
   try {
     // regex-only path: switch the NER model off through the popup before the first send
-    const extId = ctx.serviceWorkers()[0].url().split("/")[2];
+    const extId = (ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker")).url().split("/")[2];
     const setup = await ctx.newPage();
     await setup.goto("chrome-extension://" + extId + "/popup.html");
     await setup.locator("#ner").uncheck();
@@ -234,6 +234,59 @@ test("attachments are masked before upload; scanned PDF is blocked", { timeout: 
     assert.equal(note.name, "note-masqué.txt");
     // same SIRET / IBAN as in facture.pdf -> same placeholders (stable across messages and files)
     assert.equal(Buffer.from(note.b64, "base64").toString("utf8"), "Client SIRET {{SIRET_1}}, IBAN {{IBAN_1}}.");
+  } finally {
+    await ctx.close();
+    server.close();
+  }
+});
+
+// Site-agnostic path: a page with Claude / Le Chat-like markup (ProseMirror editor without id,
+// aria-label send button, no data-message-author-role) must be handled by the generic fallbacks.
+test("generic site: ProseMirror editor + aria-label send button + unmarked messages", { timeout: 120000 }, async () => {
+  const html = fs.readFileSync(path.join(__dirname, "mock", "claude.html"));
+  const server = http.createServer((_, res) => { res.setHeader("content-type", "text/html; charset=utf-8"); res.end(html); });
+  await new Promise(r => server.listen(0, "127.0.0.1", r));
+  const origin = "http://127.0.0.1:" + server.address().port;
+  const extDir = buildTestExtension(origin);
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "pfr-prof-"));
+  const ctx = await chromium.launchPersistentContext(userData, {
+    channel: "chromium", headless: true,
+    args: ["--disable-extensions-except=" + extDir, "--load-extension=" + extDir],
+  });
+  try {
+    const extId = (ctx.serviceWorkers()[0] || await ctx.waitForEvent("serviceworker")).url().split("/")[2];
+    const setup = await ctx.newPage();
+    await setup.goto("chrome-extension://" + extId + "/popup.html");
+    await setup.locator("#ner").uncheck();
+    await setup.close();
+    const page = await ctx.newPage();
+    await page.goto(origin + "/");
+    await page.waitForSelector("html[data-pfr-ready]", { state: "attached", timeout: 10000 });
+    await page.locator(".ProseMirror").click();
+    const msg = "Dossier SIRET 552 100 554 00013, contact jean@cabinet.fr.";
+    await page.keyboard.type(msg);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => window.__sent.length === 1, null, { timeout: 15000 });
+    assert.equal(await page.evaluate(() => window.__sent[0]), "Dossier SIRET {{SIRET_1}}, contact {{EMAIL_1}}.");
+    await page.waitForFunction(() => {
+      const a = document.querySelector(".assistant-turn");
+      return a && a.textContent.includes("552 100 554 00013") && !a.textContent.includes("{{");
+    }, null, { timeout: 5000 });
+    assert.equal(await page.locator(".user-turn").textContent(), msg);
+    assert.ok(await page.locator('[data-pfr-protected="restored"]').count() >= 2, "badges missing");
+    // the editor itself must never be touched by restore/conceal: type an original value, toggle reveal, check it stays
+    await page.locator(".ProseMirror").click();
+    await page.keyboard.type("note 552 100 554 00013");
+    const popup = await ctx.newPage();
+    await popup.goto("chrome-extension://" + extId + "/popup.html");
+    await popup.locator("#reveal").check();
+    await page.waitForFunction(() => document.querySelector(".user-turn").textContent.includes("{{SIRET_1}}"), null, { timeout: 3000 });
+    assert.equal(await page.locator(".ProseMirror").innerText(), "note 552 100 554 00013");
+    await popup.close();
+    // send button click path (not Enter)
+    await page.locator('button[aria-label="Envoyer le message"]').click();
+    await page.waitForFunction(() => window.__sent.length === 2, null, { timeout: 15000 });
+    assert.equal(await page.evaluate(() => window.__sent[1]), "note {{SIRET_1}}");
   } finally {
     await ctx.close();
     server.close();

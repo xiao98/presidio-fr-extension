@@ -6,7 +6,9 @@
     "build": "node scripts/build.mjs",
     "test": "node --test test/recognizers.test.js",
     "test:ner": "node --test test/ner.test.mjs",
-    "test:e2e": "node --test test/e2e.test.js"
+    "test:e2e": "node --test test/e2e.test.js",
+    "package": "node scripts/package.mjs",
+    "test:files": "node --test test/files.test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.28.2",

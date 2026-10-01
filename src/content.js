@@ -25,14 +25,32 @@
   }
 
   // ---------- input box ----------
+  // Site-agnostic: ChatGPT, Claude.ai and Le Chat all use one visible rich editor plus one send button.
+  const visible = (el) => el && el.offsetParent !== null && !el.closest("[aria-hidden='true']");
+  const firstVisible = (sels) => { for (const s of sels) for (const el of document.querySelectorAll(s)) if (visible(el)) return el; return null; };
   function findInput() {
-    return document.querySelector("#prompt-textarea")
-      || document.querySelector('[contenteditable="true"][role="textbox"]')
-      || document.querySelector("form textarea");
+    return firstVisible([
+      "#prompt-textarea",                                   // ChatGPT
+      'div.ProseMirror[contenteditable="true"]',            // Claude.ai, Le Chat
+      '[contenteditable="true"][role="textbox"]',
+      '[contenteditable="true"][aria-label]',
+      "form textarea", "textarea",
+    ]);
   }
+  const SEND_SELECTORS = [
+    'button[data-testid="send-button"]',                                  // ChatGPT
+    'button[aria-label*="send" i]', 'button[aria-label*="envoyer" i]',    // Claude.ai / Le Chat (EN / FR UI)
+    'button[type="submit"]',
+  ];
   function findSendButton() {
-    return document.querySelector('button[data-testid="send-button"]')
-      || document.querySelector('form button[type="submit"]');
+    // prefer a button in the composer around the input, then anywhere on the page
+    const input = findInput();
+    let scope = input;
+    for (let i = 0; i < 6 && scope && scope !== document.body; i++) {
+      scope = scope.parentElement;
+      for (const s of SEND_SELECTORS) for (const el of scope.querySelectorAll(s)) if (visible(el)) return el;
+    }
+    return firstVisible(SEND_SELECTORS);
   }
   function readInput(el) {
     return el.tagName === "TEXTAREA" ? el.value : el.innerText;
@@ -241,51 +259,68 @@
   }, true);
 
   // ---------- render placeholders in messages: restore originals, or reveal what the model saw ----------
-  const MSG_SELECTOR = "[data-message-author-role]";
+  // Placeholders only exist where we put them, so they can be rendered anywhere on the page except inside
+  // the editor (the user may be typing an original value) and our own toast. This keeps the extension
+  // independent of each site's message markup; known message containers only decide where the badge goes.
+  const MSG_SELECTOR = '[data-message-author-role], [data-testid*="message" i], [class*="message" i], article, li';
+  const SKIP = "[contenteditable], textarea, script, style, #pfr-toast";
+  function badgeHost(textNode) {
+    const el = textNode.parentElement;
+    if (!el) return null;
+    const host = el.closest(MSG_SELECTOR);
+    return host && host !== document.body ? host : el;
+  }
   function renderUnder(rootEl) {
-    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
-    let n, touched = 0;
+    if (rootEl.nodeType !== 1 || rootEl.closest(SKIP)) return;
+    const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => n.parentElement && n.parentElement.closest(SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    let n;
     while ((n = walker.nextNode())) {
       const v = n.nodeValue;
       const out = reveal ? vault.conceal(v) : vault.restore(v);
-      if (out !== v) { n.nodeValue = out; touched++; }
-    }
-    // Once a message has carried a placeholder, keep the badge: it is the visible proof of what left the page.
-    if (touched || (reveal && vault.hasPlaceholder(rootEl.textContent))) {
-      rootEl.dataset.pfrProtected = reveal ? "reveal" : "restored";
+      const carries = out !== v || (reveal && vault.hasPlaceholder(v));
+      if (out !== v) n.nodeValue = out;
+      // Once a message has carried a placeholder, keep the badge: it is the visible proof of what left the page.
+      if (carries) { const h = badgeHost(n); if (h) h.dataset.pfrProtected = reveal ? "reveal" : "restored"; }
     }
   }
   function renderAll() {
     if (!vault.size()) return;
-    document.querySelectorAll(MSG_SELECTOR).forEach(renderUnder);
+    renderUnder(document.body);
   }
+  const pending = new Set();
   let scheduled = false;
-  function scheduleRender() {
-    if (scheduled || !vault.size()) return;
+  function scheduleRender(nodes) {
+    if (!vault.size()) return;
+    for (const n of nodes) pending.add(n);
+    if (scheduled) return;
     scheduled = true;
-    requestAnimationFrame(() => { scheduled = false; renderAll(); });
-  }
-  function touchesMessage(m) {
-    const t = m.target;
-    const el = t.nodeType === 1 ? t : t.parentElement;
-    if (el && el.closest(MSG_SELECTOR)) return true;
-    for (const a of m.addedNodes) {
-      if (a.nodeType === 1 && (a.matches(MSG_SELECTOR) || a.querySelector(MSG_SELECTOR))) return true;
-    }
-    return false;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      const roots = [...pending]; pending.clear();
+      // streamed replies replace their text node every few ms: a queued node may be detached by now
+      for (const r of roots) if (r.isConnected) renderUnder(r);
+    });
   }
   new MutationObserver((muts) => {
-    for (const m of muts) if (touchesMessage(m)) { scheduleRender(); return; }
+    const els = [];
+    for (const m of muts) {
+      // queue elements, never text nodes (resolve the parent now, while the node is still attached)
+      if (m.type === "characterData") { if (m.target.parentElement) els.push(m.target.parentElement); }
+      else { els.push(m.target); for (const a of m.addedNodes) if (a.nodeType === 1) els.push(a); }
+    }
+    if (els.length) scheduleRender(els);
   }).observe(document.body, { childList: true, subtree: true, characterData: true });
 
   const style = document.createElement("style");
   style.textContent = `
     [data-pfr-protected]::after {
-      content: "\\1F6E1 valeurs masquées pour ChatGPT";
+      content: "\\1F6E1 valeurs masquées avant l'envoi";
       display: inline-block; margin-top: 4px; padding: 1px 6px; border-radius: 4px;
       font: 11px system-ui, sans-serif; color: #065f46; background: #d1fae5;
     }
-    [data-pfr-protected="reveal"]::after { content: "\\1F6E1 vue ChatGPT : placeholders"; color: #92400e; background: #fef3c7; }
+    [data-pfr-protected="reveal"]::after { content: "\\1F6E1 vue du modèle : placeholders"; color: #92400e; background: #fef3c7; }
   `;
   document.documentElement.appendChild(style);
   renderAll();
