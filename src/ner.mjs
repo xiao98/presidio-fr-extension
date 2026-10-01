@@ -64,25 +64,48 @@ export async function nerSpans(text) {
   const { logits } = await model(enc);
   const [, T, L] = logits.dims;
   const data = logits.data;
+  // Recall-first decoding (nym's redaction mode): a token is an entity when P(O) < 0.5, i.e. when the
+  // total entity mass wins even if it is spread over several labels; the kind is the best entity label
+  // with B and I mass pooled. Plain argmax lets "XIAO HAO 12 rue…" fall to O because the mass splits
+  // between STREET_ADDRESS, COMPANY_NAME and SURNAME.
+  const kinds = [], kindIdx = new Map();
+  const labKind = new Array(L), labTag = new Array(L);
+  for (let l = 0; l < L; l++) {
+    const lab = id2label[l], dash = lab.indexOf("-");
+    labTag[l] = dash === -1 ? lab : lab.slice(0, dash);
+    const k = dash === -1 ? "" : lab.slice(dash + 1);
+    labKind[l] = k;
+    if (k && !kindIdx.has(k)) { kindIdx.set(k, kinds.length); kinds.push(k); }
+  }
   const spans = [];
   let cur = null;
+  const mass = new Float64Array(kinds.length), bMass = new Float64Array(kinds.length);
   for (let t = 0; t < T; t++) {
     const off = offsets[t];
-    if (!off) { continue; }
-    let best = 0, bestV = -Infinity, sum = 0, maxV = -Infinity;
-    for (let l = 0; l < L; l++) { const v = data[t * L + l]; if (v > maxV) maxV = v; if (v > bestV) { bestV = v; best = l; } }
+    if (!off) continue;
+    let maxV = -Infinity, sum = 0;
+    for (let l = 0; l < L; l++) { const v = data[t * L + l]; if (v > maxV) maxV = v; }
     for (let l = 0; l < L; l++) sum += Math.exp(data[t * L + l] - maxV);
-    const p = Math.exp(bestV - maxV) / sum;
-    const lab = id2label[best];
-    const dash = lab.indexOf("-");
-    const tag = dash === -1 ? lab : lab.slice(0, dash), kind = dash === -1 ? "" : lab.slice(dash + 1);
-    if (tag === "O") { cur = null; continue; }
-    if (tag === "B" || !cur || cur.label !== kind) {
-      cur = { label: kind, start: off[0], end: off[1], score: p };
+    mass.fill(0); bMass.fill(0);
+    let pO = 0;
+    for (let l = 0; l < L; l++) {
+      const p = Math.exp(data[t * L + l] - maxV) / sum;
+      if (labTag[l] === "O") { pO += p; continue; }
+      const k = kindIdx.get(labKind[l]);
+      mass[k] += p;
+      if (labTag[l] === "B") bMass[k] += p;
+    }
+    if (pO >= 0.5) { cur = null; continue; }
+    let k = 0;
+    for (let i = 1; i < kinds.length; i++) if (mass[i] > mass[k]) k = i;
+    const kind = kinds[k], score = 1 - pO;
+    const isB = bMass[k] > mass[k] - bMass[k];
+    if (isB || !cur || cur.label !== kind) {
+      cur = { label: kind, start: off[0], end: off[1], score };
       spans.push(cur);
     } else {
       cur.end = off[1];
-      cur.score = Math.min(cur.score, p);
+      cur.score = Math.min(cur.score, score);
     }
   }
   for (const s of spans) s.text = text.slice(s.start, s.end);

@@ -13,7 +13,9 @@ Deux couches de détection :
 - **Règles** (`src/recognizers.js`, portage JS de [presidio-fr](https://github.com/xiao98/presidio-fr)) : NIR (clé 97), SIREN / SIRET (Luhn), IBAN FR (mod 97), e-mail, téléphone FR, passeport, plaque SIV, numéro fiscal (seulement en contexte fiscal).
 - **Modèle local** (`src/ner.mjs`) : [Wismut/nym-pii-multilingual-small](https://huggingface.co/Wismut/nym-pii-multilingual-small) (edge-int8, 108 Mo) via transformers.js + ONNX Runtime WASM, dans un document offscreen de l'extension. Il apporte les noms, adresses et sociétés que les règles ne peuvent pas voir. Téléchargé une fois depuis Hugging Face, mis en cache par le navigateur, exécuté hors ligne ensuite. `src/nermap.js` fusionne les deux couches : les règles ont priorité sur les identifiants structurés, les dates du modèle ne sont gardées que comme dates de naissance (« né(e) le … »).
 
-Sur [FR-PII-Bench v0](https://github.com/xiao98/presidio-fr/tree/main/eval/benchmark) (300 documents administratifs synthétiques, 2 105 entités), cette configuration obtient recall 0,96 / précision 0,97, avec 43 masquages inutiles sur 300 documents ; les règles seules restent à 0,73 de recall car elles ne voient ni les noms ni les adresses.
+Le décodage est en mode « recall-first » (un token est une entité dès que P(O) < 0,5, même si la masse se répartit entre plusieurs types), et une règle couvre la forme administrative « NOM Prénom » / « XIAO HAO » que le modèle rate souvent.
+
+Sur [FR-PII-Bench v0](https://github.com/xiao98/presidio-fr/tree/main/eval/benchmark) (300 documents administratifs synthétiques, 2 105 entités), cette configuration obtient recall 0,99 / précision 0,97, avec 41 masquages inutiles sur 300 documents (noms en capitales : 0,99, contre 0,49 pour le modèle seul) ; les règles seules restent à 0,73 de recall car elles ne voient ni les noms ni les adresses.
 
 ## Installer (mode développeur)
 

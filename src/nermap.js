@@ -43,17 +43,72 @@
     return merged;
   }
 
-  // Combine regex matches (authoritative for structured ids) with NER spans: regex wins on overlap.
+  // Administrative "NOM Prénom" / "XIAO HAO": a run of 2–4 all-caps words. The model misses ~45% of these
+  // on FR-PII-Bench, so a rule covers them. Acronyms and shouted words are excluded by a stoplist.
+  const CAPS_STOP = new Set(("SARL SAS SA SASU EURL SCI SNC SCP SELARL TVA HT TTC SIRET SIREN NIR IBAN BIC RIB CAF CPAM URSSAF RCS INSEE DGFIP " +
+    "CDI CDD RH PV PDF URL API OK NB CC RE FW TR ID NIF SPI APE NAF KBIS RIB URGENT MERCI BONJOUR ATTENTION TOTAL FACTURE DEVIS " +
+    "CONTRAT AVENANT ANNEXE ARTICLE NOTE OBJET REF DATE LIEU ETAT ETATS FRANCE PARIS LYON MARSEILLE EU UE USA CHATGPT GPT AI IA " +
+    // document headings
+    "BULLETIN PAIE ATTESTATION EMPLOYEUR AVIS CONTRAVENTION TRAVAIL DURÉE DUREE INDÉTERMINÉE INDETERMINEE DÉTERMINÉE DETERMINEE " +
+    "CERTIFICAT COURRIER LETTRE RELEVÉ RELEVE DÉCLARATION DECLARATION DEMANDE FORMULAIRE DOSSIER PROCÈS VERBAL RAPPORT COMPTE RENDU " +
+    "CONDITIONS GÉNÉRALES GENERALES VENTE MANDAT PROCURATION CONVENTION ACCORD SOCIÉTÉ SOCIETE ENTREPRISE CABINET CAISSE ALLOCATIONS FAMILIALES").split(" "));
+  // function words inside a caps run mean a title, not a name ("AVIS DE CONTRAVENTION"); LE/LA are kept (LE GOFF, LA FONTAINE)
+  const CAPS_FUNC = new Set("DE DU DES ET À A AU AUX EN SUR POUR PAR SANS AVEC OU".split(" "));
+  // 1–3 ALL-CAPS words (XIAO HAO, LE GOFF) optionally followed by 1–2 Capitalised words (DUPONT Jean, LE GOFF Isaac);
+  // at least two words in total and one caps word of 3+ letters.
+  const CAPS = "[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ'-]+";
+  const CAP = "[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ'-]+";
+  const RUN = new RegExp(`(?<![A-Za-zÀ-ÿ])(${CAPS}(?:[ \\u00a0]+${CAPS}){0,2})((?:[ \\u00a0]+${CAP}){0,2})(?![A-Za-zÀ-ÿ])`, "g");
+  function capsNames(text) {
+    const out = [];
+    let m;
+    while ((m = RUN.exec(text)) !== null) {
+      const caps = m[1].split(/[  ]+/);
+      if (caps.some(w => CAPS_STOP.has(w.replace(/['-]/g, "")) || CAPS_FUNC.has(w))) continue;
+      if (!caps.some(w => w.length >= 3)) continue;
+      const words = m[0].trim().split(/[  ]+/);
+      if (words.length < 2) continue;
+      out.push({ type: "PERSON", start: m.index, end: m.index + m[0].length, text: m[0] });
+    }
+    return out;
+  }
+
+  // Cut `s` by every authoritative span it overlaps; returns the surviving pieces (0, 1 or 2 per cut).
+  function subtract(text, s, auth) {
+    let pieces = [s];
+    for (const a of auth) {
+      const next = [];
+      for (const p of pieces) {
+        if (Math.min(a.end, p.end) <= Math.max(a.start, p.start)) { next.push(p); continue; }
+        if (p.start < a.start) next.push({ type: p.type, start: p.start, end: a.start });
+        if (a.end < p.end) next.push({ type: p.type, start: a.end, end: p.end });
+      }
+      pieces = next;
+    }
+    return pieces.map(p => {
+      // trim whitespace / punctuation left at the cut
+      let { start, end } = p;
+      while (start < end && /[\s,;:()]/.test(text[start])) start++;
+      while (end > start && /[\s,;:()]/.test(text[end - 1])) end--;
+      return { type: p.type, start, end, text: text.slice(start, end) };
+    }).filter(p => p.end - p.start >= 2);
+  }
+
+  // Combine: regex (structured ids) and caps-name rule are authoritative; NER spans are trimmed around them.
   function combine(text, regexMatches, nerRaw) {
-    const all = regexMatches.map(m => ({ type: m.type, start: m.start, end: m.end, text: m.text, src: "regex" }));
+    const auth = regexMatches.map(m => ({ type: m.type, start: m.start, end: m.end, text: m.text, src: "regex" }));
+    for (const c of capsNames(text)) {
+      if (auth.some(a => Math.min(a.end, c.end) > Math.max(a.start, c.start))) continue;
+      auth.push({ ...c, src: "rule" });
+    }
+    const all = auth.slice();
     for (const s of mapSpans(text, nerRaw)) {
-      if (all.some(a => Math.min(a.end, s.end) > Math.max(a.start, s.start))) continue;
-      all.push({ ...s, src: "ner" });
+      for (const p of subtract(text, s, auth)) all.push({ ...p, src: "ner" });
     }
     return all.sort((a, b) => a.start - b.start);
   }
 
-  const api = { mapSpans, combine, LABEL };
+  const api = { mapSpans, combine, capsNames, LABEL };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.PFR = Object.assign(root.PFR || {}, api);
 })(typeof globalThis !== "undefined" ? globalThis : this);

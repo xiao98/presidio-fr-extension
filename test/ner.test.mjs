@@ -56,7 +56,14 @@ test("JS NER on FR-PII-Bench: raw nym and product config (nym + regex, DATE gate
   const r = score(raw), p = score(product);
   console.log(`raw nym (JS):      recall_any ${r.recall.toFixed(3)}  precision ${r.precision.toFixed(3)}  false masks ${r.falseMasks}   (${ms.toFixed(0)} ms/doc)`);
   console.log(`nym+regex, gated:  recall_any ${p.recall.toFixed(3)}  precision ${p.precision.toFixed(3)}  false masks ${p.falseMasks}`);
-  console.log("product recall by label:", Object.fromEntries(Object.entries(p.byLabel).map(([k, v]) => [k, +(v.hit / v.n).toFixed(2)])));
+  console.log("product recall by label:", JSON.stringify(Object.fromEntries(Object.entries(p.byLabel).map(([k, v]) => [k, +(v.hit / v.n).toFixed(2)]))));
+  // PERSON recall by writing style (the administrative caps form is the known weak spot)
+  const style = { caps: [0, 0], other: [0, 0] };
+  for (const d of docs) for (const g of d.entities) if (g.label === "PERSON") {
+    const k = /^[A-ZÀ-Ö' -]+ [A-ZÀ-Ö][a-zà-ÿ]/.test(g.text) ? "caps" : "other";
+    style[k][1]++; if (covered(g, product[d.id])) style[k][0]++;
+  }
+  console.log(`PERSON recall  caps ${(style.caps[0] / style.caps[1]).toFixed(2)} (n=${style.caps[1]})  other ${(style.other[0] / style.other[1]).toFixed(2)} (n=${style.other[1]})`);
   assert.ok(r.recall >= 0.95, "raw JS recall below Python run");
   assert.ok(p.recall >= 0.93 && p.precision >= 0.95, "product config regressed vs Python union_nodate (0.948 / 0.978)");
 });
