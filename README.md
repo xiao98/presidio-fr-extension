@@ -17,12 +17,11 @@ Sur [FR-PII-Bench v0](https://github.com/xiao98/presidio-fr/tree/main/eval/bench
 
 ## Installer (mode développeur)
 
-```bash
-npm install
-npm run build          # bundle dist/offscreen.js + copie des .wasm dans vendor/
-```
+Télécharger `presidio-fr-shield-<version>.zip` dans [Releases](https://github.com/xiao98/presidio-fr-extension/releases) et le décompresser. Il contient déjà le bundle et le runtime WASM : rien à installer, pas de Node.
 
-1. `chrome://extensions` → activer **Mode développeur** → **Charger l'extension non empaquetée** → choisir ce dossier.
+Depuis les sources : `npm install && npm run build` produit `dist/` et `vendor/` (non versionnés, ~85 Mo).
+
+1. `chrome://extensions` → activer **Mode développeur** → **Charger l'extension non empaquetée** → choisir le dossier décompressé.
 2. L'icône de l'extension affiche l'état du modèle (chargement … % / prêt). Tant qu'il charge, un envoi contenant des données est retenu, jamais envoyé en clair.
 3. Ouvrir chatgpt.com. Un toast « 🛡 3 données masquées : PERSON, ADDRESS, NIR » apparaît à chaque envoi filtré.
 
