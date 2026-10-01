@@ -14,15 +14,30 @@
     if (area !== "local") return;
     if (ch.enabled) enabled = ch.enabled.newValue;
     if (ch.reveal) { reveal = ch.reveal.newValue; renderAll(); }
+    if (ch.licenseKey) refreshTier();
   });
 
-  async function persist(newCount, types) {
+  // persist: vault (session), counters, and one audit entry per masking event. The audit log is the DPO's
+  // registre: timestamps, site, kind of event, counts per type. Never any value (same rule as AstrLink's
+  // findings: offsets and kinds, no plaintext).
+  const AUDIT_KEY = "audit", AUDIT_MAX = 5000;
+  async function persist(newCount, types, event) {
     try { await chrome.storage.session.set({ [VAULT_KEY]: vault.serialize() }); } catch (_) { /* memory only */ }
-    const s = (await chrome.storage.local.get({ [STATS_KEY]: { masked: 0, byType: {} } }))[STATS_KEY];
+    const got = await chrome.storage.local.get({ [STATS_KEY]: { masked: 0, byType: {} }, [AUDIT_KEY]: [] });
+    const s = got[STATS_KEY];
     s.masked += newCount;
-    for (const t of types) s.byType[t] = (s.byType[t] || 0) + 1;
-    await chrome.storage.local.set({ [STATS_KEY]: s });
+    const byType = {};
+    for (const t of types) { s.byType[t] = (s.byType[t] || 0) + 1; byType[t] = (byType[t] || 0) + 1; }
+    const audit = got[AUDIT_KEY];
+    audit.push({ ts: new Date().toISOString(), site: location.host, kind: (event && event.kind) || "message", file: (event && event.file) || "", byType });
+    if (audit.length > AUDIT_MAX) audit.splice(0, audit.length - AUDIT_MAX);
+    await chrome.storage.local.set({ [STATS_KEY]: s, [AUDIT_KEY]: audit });
   }
+
+  // Entitlement: trial / licensed -> everything; free -> rules only (model off, attachments blocked).
+  let tier = "trial";
+  async function refreshTier() { try { tier = (await globalThis.PFR.entitlement()).tier; } catch (_) { tier = "trial"; } }
+  await refreshTier();
 
   // ---------- input box ----------
   // Site-agnostic: ChatGPT, Claude.ai and Le Chat all use one visible rich editor plus one send button.
@@ -86,7 +101,7 @@
   chrome.storage.onChanged.addListener((ch, area) => { if (area === "local" && ch.ner) ner = ch.ner.newValue; });
 
   async function nerSpans(text) {
-    if (!ner) return { spans: [] };
+    if (!ner || tier === "free") return { spans: [] };
     try { return (await chrome.runtime.sendMessage({ target: "background", type: "ner", text })) || { error: "no_reply" }; }
     catch (e) { return { error: "model_error", detail: String(e && e.message || e) }; }
   }
@@ -129,7 +144,7 @@
       return;
     }
     const types = [...new Set(matches.map(m => m.type))];
-    persist(vault.size() - before, matches.map(m => m.type));
+    persist(vault.size() - before, matches.map(m => m.type), { kind: "message" });
     const n = matches.length;
     toast(n + " donnée" + (n > 1 ? "s" : "") + " masquée" + (n > 1 ? "s" : "") + " : " + types.join(", "));
     resend(el);
@@ -173,12 +188,13 @@
 
   // Returns the masked File, or null when the upload must be blocked (toast already shown).
   async function maskFile(file) {
+    if (tier === "free") { toast(file.name + " : pièces jointes réservées à la version licenciée (période d'essai terminée). Envoi bloqué.", true); return null; }
     if (file.size > MAX_FILE) { toast(file.name + " : fichier trop volumineux (> 25 Mo), envoi bloqué.", true); return null; }
     if (!/\.(pdf|docx|xlsx|txt|csv|md)$/i.test(file.name)) {
       toast(file.name + " : type non pris en charge (PDF, Word, Excel, texte), envoi bloqué.", true); return null;
     }
     let r;
-    try { r = await chrome.runtime.sendMessage({ target: "background", type: "file.extract", name: file.name, ner, b64: await toB64(file) }); }
+    try { r = await chrome.runtime.sendMessage({ target: "background", type: "file.extract", name: file.name, ner: ner && tier !== "free", b64: await toB64(file) }); }
     catch (e) { r = { error: "model_error", detail: String(e && e.message || e) }; }
     if (!r || r.error) {
       const why = { not_ready: "modèle en cours de chargement, réessayez dans un instant", scanned: "PDF scanné sans texte, non masquable pour l'instant",
@@ -202,7 +218,7 @@
     try { w = await chrome.runtime.sendMessage({ target: "background", type: "file.rewrite", job: r.job, redactedById }); }
     catch (e) { w = { error: "model_error" }; }
     if (!w || w.error) { toast(file.name + " : réécriture impossible (" + (w && w.error) + "). Envoi bloqué.", true); return null; }
-    persist(vault.size() - before, [...types]);
+    persist(vault.size() - before, [...types], { kind: "file", file: (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase() });
     toast(file.name + " → " + w.name + " : " + count + " donnée" + (count > 1 ? "s" : "") + " masquée" + (count > 1 ? "s" : "") + (count ? " : " + [...types].join(", ") : ""));
     return fromB64(w.b64, w.name, w.mime);
   }

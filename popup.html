@@ -14,9 +14,16 @@
   <label><input type="checkbox" id="reveal"> Afficher ce que le modèle a reçu</label>
   <label><input type="checkbox" id="ner"> Noms, adresses, sociétés (modèle local, 120 Mo)</label>
   <div class="muted" id="nerStatus"></div>
+  <div class="muted" id="tier"></div>
+  <details><summary class="muted">Clé de licence</summary>
+    <input id="licenseKey" placeholder="PFR1.…" style="width:100%;box-sizing:border-box;font:11px monospace">
+    <div class="muted" id="licenseStatus"></div>
+  </details>
+  <button id="export" style="margin-top:8px">Exporter le registre (CSV)</button>
   <div class="n" id="masked">0</div>
   <div class="muted">données masquées depuis l'installation</div>
   <ul id="byType"></ul>
   <p class="muted">Détection et masquage entièrement locaux. Rien n'est envoyé ailleurs.</p>
+  <script src="src/license.js"></script>
   <script src="popup.js"></script>
 </body></html>

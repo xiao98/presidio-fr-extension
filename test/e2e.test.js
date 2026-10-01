@@ -65,12 +65,12 @@ test("redact on send, restore in reply, vault survives reload", async () => {
     assert.equal(sent, "Le salarié NIR {{NIR_1}}, mail {{EMAIL_1}}, SIRET {{SIRET_1}} est en arrêt.");
 
     // assistant echo streams "Reçu : ...{{NIR_1}}..." and must end up restored on screen
-    await page.waitForFunction(() => {
+    // wait for the stream to finish AND the last replacement to be restored (each streamed chunk is a
+    // new text node, restored on the next animation frame)
+    await page.waitForFunction((expected) => {
       const a = document.querySelector('[data-message-author-role="assistant"]');
-      return a && a.textContent.includes("185057800608491".slice(0, 1) + " 85 05 78 006 084 91") && !a.textContent.includes("{{");
-    }, null, { timeout: 5000 });
-    const shown = await page.locator('[data-message-author-role="assistant"]').textContent();
-    assert.equal(shown, "Reçu : " + msg);
+      return a && a.textContent === expected;
+    }, "Reçu : " + msg, { timeout: 5000 });
     assert.equal(await page.locator('[data-message-author-role="user"]').textContent(), msg);
     assert.ok((await page.locator("#pfr-toast").textContent()).includes("3 données masquées"));
     // visible proof: both bubbles carry the shield badge
@@ -80,6 +80,12 @@ test("redact on send, restore in reply, vault survives reload", async () => {
     const popup = await ctx.newPage();
     await popup.goto("chrome-extension://" + extId + "/popup.html");
     assert.equal(await popup.locator("#masked").textContent(), "3");
+    // audit log: one entry per masking event, counts per type, never a value
+    const audit = await popup.evaluate(() => chrome.storage.local.get("audit").then(v => v.audit));
+    assert.equal(audit.length, 1);
+    assert.deepEqual(audit[0].byType, { NIR: 1, EMAIL: 1, SIRET: 1 });
+    assert.ok(!JSON.stringify(audit).includes("185057800608491"));
+    assert.ok(/essai|licenc/i.test(await popup.locator("#tier").textContent()));
     await popup.locator("#reveal").check();
     await page.waitForFunction(() => document.querySelector('[data-message-author-role="assistant"]').textContent.includes("{{NIR_1}}"), null, { timeout: 3000 });
     assert.equal(await page.locator('[data-message-author-role="user"]').textContent(), "Le salarié NIR {{NIR_1}}, mail {{EMAIL_1}}, SIRET {{SIRET_1}} est en arrêt.");

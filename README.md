@@ -58,6 +58,12 @@ npm run test:e2e                # extension dans Chromium contre une page qui im
 PFR_E2E_NER=1 npm run test:e2e  # idem avec le vrai modèle chargé dans le navigateur (lent)
 ```
 
+## Registre, licence
+
+- **Registre (audit)** : chaque masquage ajoute une ligne (horodatage, site, message ou fichier, nombre par type). Jamais de valeur. « Exporter le registre (CSV) » dans la fenêtre de l'extension produit le fichier qu'un DPO peut classer. 5 000 lignes glissantes, stockées localement.
+- **Licence** : 14 jours d'essai complets à l'installation, puis règles seules sans clé (modèle et pièces jointes désactivés). Les clés sont signées Ed25519 et vérifiées hors ligne dans le navigateur, il n'y a pas de serveur de licence. Côté vendeur : `node scripts/license.mjs keygen` une fois (coller la clé publique dans `src/license.js`), puis `node scripts/license.mjs sign <privkey.json> <email> <plan> <postes> <AAAA-MM-JJ>` par client. Le code étant MIT, la licence n'est pas une protection technique ; elle porte la facture et le support.
+- **Restauration tolérante** : un modèle ou un rendu markdown écrit parfois `{{ SIRET_1 }}`, `{{SIRET\_1}}` ou `**{{SIRET_1}}**` ; toutes ces graphies sont restaurées (seule la forme canonique est produite).
+
 ## Publication
 
 `npm run package` produit `store/presidio-fr-shield-<version>.zip` (manifest à la racine, pour le Chrome Web Store) et `-unpacked.zip` (pour « charger l'extension non empaquetée »). Le dossier de publication est dans [STORE.md](STORE.md), la politique de confidentialité dans [PRIVACY.md](PRIVACY.md).

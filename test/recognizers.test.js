@@ -86,3 +86,34 @@ test("caps-name rule: NOM Prénom / XIAO HAO, acronyms excluded, NER spans trimm
   const raw = [{ label: "STREET_ADDRESS", start: 0, end: 26, score: 0.6 }, { label: "ZIP_CODE", start: 28, end: 33, score: 0.99 }, { label: "CITY", start: 34, end: 39, score: 0.99 }];
   assert.deepEqual(combine(text, [], raw).map(x => [x.type, x.text, x.src]), [["PERSON", "XIAO HAO", "rule"], ["ADDRESS", "12 rue de la Paix, 75002 Paris", "ner"]]);
 });
+
+test("restore tolerates the spellings models and markdown produce", () => {
+  const v = createVault();
+  const t = "NIR 185057800608491 et SIRET 55210055400013";
+  v.redact(t, findPII(t));
+  assert.equal(v.restore("a {{ NIR_1 }} b **{{SIRET_1}}** c {{NIR\_1}} d {{SIRET-1}} e {{NIR_7}}"),
+    "a 185057800608491 b **55210055400013** c 185057800608491 d 55210055400013 e {{NIR_7}}");
+  assert.ok(v.hasPlaceholder("x {{ NIR_1 }}") && !v.hasPlaceholder("x NIR_1"));
+});
+
+const { verifyKey, entitlement } = require("../src/license.js");
+const { webcrypto } = require("node:crypto");
+
+test("licence: Ed25519 key verifies, expired/tampered keys fail, trial then free", async () => {
+  const pair = await webcrypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const pub = await webcrypto.subtle.exportKey("jwk", pair.publicKey);
+  const sign = async (payload) => {
+    const p = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const s = await webcrypto.subtle.sign({ name: "Ed25519" }, pair.privateKey, new TextEncoder().encode(p));
+    return `PFR1.${p}.${Buffer.from(s).toString("base64url")}`;
+  };
+  const good = await sign({ e: "a@b.fr", p: "pro", s: 3, x: "2099-01-01" });
+  assert.equal((await verifyKey(good, pub)).valid, true);
+  assert.equal((await verifyKey(await sign({ e: "a@b.fr", p: "pro", s: 1, x: "2020-01-01" }), pub)).reason, "expired");
+  assert.equal((await verifyKey(good.slice(0, -2) + "zz", pub)).reason, "signature");
+  assert.equal((await verifyKey("nope", pub)).reason, "format");
+  // entitlement with an in-memory storage: fresh install -> trial; 15 days later -> free
+  const mem = (data) => ({ get: async (d) => ({ ...d, ...data }), set: async (v) => Object.assign(data, v) });
+  assert.equal((await entitlement(mem({}))).tier, "trial");
+  assert.equal((await entitlement(mem({ installedAt: Date.now() - 15 * 86400000 }))).tier, "free");
+});

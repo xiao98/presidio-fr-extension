@@ -2,6 +2,11 @@
 // so the model can refer to "{{NIR_1}}" consistently across turns.
 (function (root) {
   const PH = /\{\{([A-Z]+)_(\d+)\}\}/g;
+  // Models and markdown renderers do not always echo a placeholder byte for byte: "{{ SIRET_1 }}",
+  // "{{SIRET\_1}}" (escaped underscore), "{{SIRET_1}}" wrapped in bold, "{{SIRET-1}}". Match every spelling
+  // that still identifies the placeholder unambiguously and restore it (idea borrowed from AstrLink's
+  // "restore spellings"). Only the canonical form is ever generated.
+  const PH_LOOSE = /\{\{\s*\**\s*([A-Z]+)\s*(?:\\_|_|-|\s)\s*(\d+)\s*\**\s*\}\}/g;
 
   function createVault(initial) {
     const toPh = new Map(Object.entries((initial && initial.toPh) || {}));
@@ -30,7 +35,7 @@
     }
 
     function restore(text) {
-      return text.replace(PH, ph => toOrig.get(ph) || ph);
+      return text.replace(PH_LOOSE, (m, type, n) => toOrig.get("{{" + type + "_" + n + "}}") || m);
     }
 
     // Inverse of restore: show the placeholders the model actually received.
@@ -40,7 +45,7 @@
       return out;
     }
 
-    function hasPlaceholder(text) { PH.lastIndex = 0; return PH.test(text); }
+    function hasPlaceholder(text) { PH_LOOSE.lastIndex = 0; return PH_LOOSE.test(text); }
 
     function serialize() {
       return { toPh: Object.fromEntries(toPh), toOrig: Object.fromEntries(toOrig), counters };
